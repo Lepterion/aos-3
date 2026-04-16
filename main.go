@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 )
 
 // --- Типи та константи ---
@@ -40,12 +44,24 @@ const (
 	OpTrap OpCode = 15 // 1111
 )
 
+const (
+	TrapGetc  = 0x20 // Зчитати один символ (без виводу на екран)
+	TrapOut   = 0x21 // Вивести символ з R0 на екран
+	TrapPuts  = 0x22 // Вивести рядок (указівник у R0)
+	TrapIn    = 0x23 // Зчитати символ з виводом на екран (echo)
+	TrapPutsp = 0x24 // Вивести запакований рядок
+	TrapHalt  = 0x25 // Зупинити віртуальну машину
+
+	TrapInU16  = 0x26 // Зчитати uint16 з клавіатури у R0
+	TrapOutU16 = 0x27 // Вивести uint16 з R0 у консоль
+)
+
 type Instruction struct {
 	Code uint16
 	Text string
 }
 
-// --- Архітектура двопрохідного компілятора ---
+// --- Двопрохідний компілятор ---
 
 // Statement представляє або Мітку (Label), або Інструкцію
 type Statement struct {
@@ -306,7 +322,25 @@ func Data(val uint16, comment string) Statement {
 // --- Головна програма ---
 
 func main() {
-	// Варіант 7: a * (1 - b)
+	var valA, valB uint16
+
+	fmt.Println("=== Генератор коду LC-3 для задачі: a * (1 - b) ===")
+
+	// Запитуємо користувача про значення
+	fmt.Print("Введіть значення для a (додатне ціле): ")
+	if _, err := fmt.Scanf("%d", &valA); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Помилка вводу: %v\n", err)
+		return
+	}
+
+	fmt.Print("Введіть значення для b (додатне ціле): ")
+	// Очищуємо буфер після попереднього уводу, щоб уникнути проблем зі знаком нового рядка
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	if _, err := fmt.Scanf("%d", &valB); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Помилка вводу: %v\n", err)
+		return
+	}
+
 	programStmts := []Statement{
 		LD(R0, "VAL_A"),
 		LD(R1, "VAL_B"),
@@ -327,11 +361,15 @@ func main() {
 		AddImm(R2, R2, 1),
 
 		ST(R2, "RES"),
-		TRAP(0x25),
+
+		AddImm(R0, R2, 0),
+		TRAP(TrapOutU16),
+
+		TRAP(TrapHalt),
 
 		// Змінні в пам'яті
-		Label("VAL_A"), Data(0x0005, "a = 5"),
-		Label("VAL_B"), Data(0x0003, "b = 3"),
+		Label("VAL_A"), Data(valA, fmt.Sprintf("a = %d", valA)),
+		Label("VAL_B"), Data(valB, fmt.Sprintf("b = %d", valB)),
 		Label("RES"), Data(0x0000, "результат"),
 	}
 
@@ -343,7 +381,7 @@ func main() {
 	}
 
 	// --- Вивід у консоль ---
-	fmt.Println("Згенерований код для LC-3:")
+	fmt.Println("\nЗгенерований код для LC-3:")
 	fmt.Println("----------------------------------------------------------------------")
 	fmt.Printf("%-5s | %-6s | %-19s | %s\n", "Адр.", "Hex", "Binary", "Асемблер")
 	fmt.Println("----------------------------------------------------------------------")
@@ -365,15 +403,79 @@ func main() {
 		return
 	}
 
-	defer func() {
-		_ = f.Close()
-	}()
-
 	err = binary.Write(f, binary.LittleEndian, binProgram)
+	_ = f.Close()
+
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Помилка запису: %v\n", err)
 		return
 	}
 
-	fmt.Printf("Бінарний файл %s успішно згенеровано\n", outputFile)
+	fmt.Printf("Бінарний файл %s успішно згенеровано!\n", outputFile)
+
+	if _, err := os.Stat("vm.exe"); err == nil {
+		fmt.Print("\nЗнайдено vm.exe у поточній директорії. Бажаєте запустити програму? (y/N): ")
+
+		var response string
+		_, _ = fmt.Scan(&response)
+		response = strings.ToLower(strings.TrimSpace(response))
+
+		if response == "y" || response == "yes" || response == "н" || response == "так" {
+			fmt.Println("\n=== Запуск vm.exe", outputFile, "===")
+
+			cmd := exec.Command("./vm.exe", outputFile)
+
+			// Перехоплюємо стандартний вивід ВМ
+			stdoutPipe, err := cmd.StdoutPipe()
+			if err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Помилка перехоплення виводу: %v\n", err)
+				return
+			}
+
+			// Помилки та увід залишаємо прямими
+			cmd.Stderr = os.Stderr
+			cmd.Stdin = os.Stdin
+
+			if err := cmd.Start(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "\nПомилка запуску vm.exe: %v\n", err)
+				return
+			}
+
+			foundResult := false
+			var result int16
+
+			// Читаємо вивід віртуальної машини рядок за рядком
+			scanner := bufio.NewScanner(stdoutPipe)
+			for scanner.Scan() {
+				line := scanner.Text()
+
+				// Якщо рядок не містить технічної інформації (mem або reg), ми перевіряємо, чи є в ньому число, виведене через TRAP
+				if !strings.Contains(line, "mem[") && !strings.Contains(line, "reg[") && !strings.Contains(line, "memory") {
+					// Спробуємо зчитати рядок як беззнакове число (uint16)
+					cleanLine := strings.TrimSpace(line)
+					if val, err := strconv.ParseUint(cleanLine, 10, 16); err == nil {
+						signedVal := int16(uint16(val))
+						fmt.Printf("%s\t<-- Результат (У знаковому виді: %d)\n", line, signedVal)
+						result = signedVal
+						foundResult = true
+						continue
+					}
+				}
+
+				// Якщо це звичайний рядок (або дамп пам'яті), просто друкуємо його
+				fmt.Println(line)
+			}
+
+			_ = cmd.Wait()
+			fmt.Println("\n=== Роботу віртуальної машини завершено ===")
+
+			if foundResult {
+				fmt.Printf("Зчитаний результат: %d\n", result)
+			} else {
+				fmt.Printf("Результат не знайдено у виводі віртуальної машини. Помилка?")
+			}
+		} else {
+			fmt.Println("Запуск скасовано.")
+		}
+	}
 }
