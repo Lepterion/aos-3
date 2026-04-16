@@ -306,7 +306,7 @@ func Data(val uint16, comment string) Statement {
 // --- Головна програма ---
 
 func main() {
-	// Завдання 7: a * (1 - b)
+	// Варіант 7: a * (1 - b)
 	programStmts := []Statement{
 		LD(R0, "VAL_A"),
 		LD(R1, "VAL_B"),
