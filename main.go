@@ -326,18 +326,15 @@ func main() {
 
 	fmt.Println("=== Генератор коду LC-3 для задачі: a * (1 - b) ===")
 
-	// Запитуємо користувача про значення
 	fmt.Print("Введіть значення для a (додатне ціле): ")
-	if _, err := fmt.Scanf("%d", &valA); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Помилка вводу: %v\n", err)
+	if _, err := fmt.Scan(&valA); err != nil {
+		fmt.Fprintf(os.Stderr, "Помилка вводу: %v\n", err)
 		return
 	}
 
 	fmt.Print("Введіть значення для b (додатне ціле): ")
-	// Очищуємо буфер після попереднього уводу, щоб уникнути проблем зі знаком нового рядка
-	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
-	if _, err := fmt.Scanf("%d", &valB); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Помилка вводу: %v\n", err)
+	if _, err := fmt.Scan(&valB); err != nil {
+		fmt.Fprintf(os.Stderr, "Помилка вводу: %v\n", err)
 		return
 	}
 
@@ -413,31 +410,39 @@ func main() {
 
 	fmt.Printf("Бінарний файл %s успішно згенеровано!\n", outputFile)
 
+	var vmExecutable string
+
 	if _, err := os.Stat("vm.exe"); err == nil {
-		fmt.Print("\nЗнайдено vm.exe у поточній директорії. Бажаєте запустити програму? (y/N): ")
+		vmExecutable = "./vm.exe"
+	} else if _, err := os.Stat("vm"); err == nil {
+		vmExecutable = "./vm"
+	}
+
+	if vmExecutable != "" {
+		fmt.Printf("\nЗнайдено віртуальну машину (%s) у поточній директорії. Бажаєте запустити програму? (y/N): ", vmExecutable)
 
 		var response string
-		_, _ = fmt.Scan(&response)
+		fmt.Scan(&response)
 		response = strings.ToLower(strings.TrimSpace(response))
 
 		if response == "y" || response == "yes" || response == "н" || response == "так" {
-			fmt.Println("\n=== Запуск vm.exe", outputFile, "===")
+			fmt.Println("\n=== Запуск", vmExecutable, outputFile, "===")
 
-			cmd := exec.Command("./vm.exe", outputFile)
+			cmd := exec.Command(vmExecutable, outputFile)
 
 			// Перехоплюємо стандартний вивід ВМ
 			stdoutPipe, err := cmd.StdoutPipe()
 			if err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "Помилка перехоплення виводу: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Помилка перехоплення виводу: %v\n", err)
 				return
 			}
 
-			// Помилки та увід залишаємо прямими
+			// Помилки та ввід залишаємо прямими
 			cmd.Stderr = os.Stderr
 			cmd.Stdin = os.Stdin
 
 			if err := cmd.Start(); err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "\nПомилка запуску vm.exe: %v\n", err)
+				fmt.Fprintf(os.Stderr, "\nПомилка запуску %s: %v\n", vmExecutable, err)
 				return
 			}
 
@@ -449,9 +454,7 @@ func main() {
 			for scanner.Scan() {
 				line := scanner.Text()
 
-				// Якщо рядок не містить технічної інформації (mem або reg), ми перевіряємо, чи є в ньому число, виведене через TRAP
 				if !strings.Contains(line, "mem[") && !strings.Contains(line, "reg[") && !strings.Contains(line, "memory") {
-					// Спробуємо зчитати рядок як беззнакове число (uint16)
 					cleanLine := strings.TrimSpace(line)
 					if val, err := strconv.ParseUint(cleanLine, 10, 16); err == nil {
 						signedVal := int16(uint16(val))
@@ -462,20 +465,21 @@ func main() {
 					}
 				}
 
-				// Якщо це звичайний рядок (або дамп пам'яті), просто друкуємо його
 				fmt.Println(line)
 			}
 
-			_ = cmd.Wait()
+			cmd.Wait()
 			fmt.Println("\n=== Роботу віртуальної машини завершено ===")
 
 			if foundResult {
 				fmt.Printf("Зчитаний результат: %d\n", result)
 			} else {
-				fmt.Printf("Результат не знайдено у виводі віртуальної машини. Помилка?")
+				fmt.Println("Результат не знайдено у виводі віртуальної машини. Помилка?")
 			}
 		} else {
 			fmt.Println("Запуск скасовано.")
 		}
+	} else {
+		fmt.Println("\nВіртуальну машину (vm або vm.exe) не знайдено в поточній директорії. Запуск пропущено.")
 	}
 }
